@@ -55,31 +55,25 @@ class DBWNode(object):
 		self.steer_pub = rospy.Publisher('/vehicle/steering_cmd', SteeringCmd, queue_size=1)
 		self.throttle_pub = rospy.Publisher('/vehicle/throttle_cmd', ThrottleCmd, queue_size=1)
 		self.brake_pub = rospy.Publisher('/vehicle/brake_cmd', BrakeCmd, queue_size=1)
-	#Set class variables to default values
+		
+		#Set class variables to default values
 		self.reset()
-		# TODO: Create `TwistController` object
-		self.controller = Controller(wheel_base, steer_ratio, min_speed, max_lat_accel, max_steer_angle)		
 
-        # TODO: Subscribe to all the topics you need to
+		#Create `TwistController` object
+		self.controller = Controller(wheel_base, steer_ratio, min_speed, max_lat_accel, max_steer_angle, decel_limit, accel_limit, brake_deadband)
+
+        #Subscribe to all required topics
 		rospy.Subscriber('/current_velocity', TwistStamped, callback=self.current_velocity_cb, queue_size=1)
 		rospy.Subscriber('/twist_cmd', TwistStamped, callback=self.twist_cmd_cb, queue_size=1)
 		rospy.Subscriber('/vehicle/dbw_enabled', Bool, callback=self.dbw_enabled_cb, queue_size=1)
-        #rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb, queue_size=1)
-        #rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb, queue_size=1)
+
 		self.loop()
 
 	def reset(self):
 		self.linear_velocity = None
 		self.angular_velocity = None
 		self.current_linear = None
-		self.pose = None
-		self.final_waypoints = None
 		self.dbw_enabled = None
-		self.time_elapsed = 0.0
-		self.previous_time = rospy.get_time()
-
-		self.previous_linear = None
-		self.decel = 0.0
 
 	#Callback functions
 	def current_velocity_cb(self, msg):
@@ -92,14 +86,6 @@ class DBWNode(object):
 	def dbw_enabled_cb(self, msg):
 		self.dbw_enabled = msg.data
 
-	def pose_cb(self, msg):
-		pass
-		self.pose = [msg.pose.position.x, msg.pose.position.y]
-
-	def waypoints_cb(self, msg):
-		pass
-		self.final_waypoints = [[msg.waypoints[0].pose.pose.position.x,msg.waypoints[0].pose.pose.position.y],[msg.waypoints[5].pose.pose.position.x,msg.waypoints[5].pose.pose.position.y]]
-
 	"""
 	Primary Logic for drive-by-wire node.
 
@@ -111,28 +97,23 @@ class DBWNode(object):
 
 	"""
 	def loop(self):
-		rate = rospy.Rate(5) #Was originally set to 50Hz
+		loop_rate = 5
+		rate = rospy.Rate(loop_rate) #Was originally set to 50Hz
+		previous_time = rospy.get_time()
+		previous_linear = self.current_linear
 		while not rospy.is_shutdown():
 		#Only publish if drive-by-wire is enabled
 			if self.dbw_enabled:
-				self.time_elapsed = rospy.get_time() - self.previous_time if self.previous_time else 0.0
-				self.previous_time = rospy.get_time()
-				self.decel = (self.previous_linear-self.current_linear)/self.time_elapsed if self.previous_linear and self.time_elapsed > 0.0 else 0.0
-				self.previous_linear = self.current_linear
-				throttle, brake, steer = self.controller.control(self.linear_velocity, self.angular_velocity, self.current_linear, self.pose, self.final_waypoints, self.dbw_enabled, self.time_elapsed)
-				#If throttle needs to applied or the % of max brakeis less than the deadband % than not apply breaking
-				if throttle > 0.0 or (brake < self.brake_deadband_perc and self.current_linear > 0.5): brake = 0.0
-				#if throttle > 0.0 or (self.decel < self.brake_deadband and self.current_linear > 0.5): brake = 0.0
-				else: brake = self.brake_max_torque*brake
+				throttle, brake, steer = self.controller.control(self.linear_velocity, self.angular_velocity, self.current_linear, self.dbw_enabled)
+				brake = self.brake_max_torque*brake
 				
-				rospy.loginfo('linear: %s, current: %s', self.linear_velocity, self.current_linear)
-				rospy.loginfo('angular: %s, decel: %s, time: %s', self.angular_velocity, self.decel, self.previous_time)
-				rospy.loginfo('throttle: %s, brake: %s, steer: %s', throttle, brake, steer)
-
+				rospy.logwarn('linear: %s, current: %s', self.linear_velocity, self.current_linear)
+				rospy.logwarn('throttle: %s, brake: %s, steer: %s', throttle, brake, steer)
 				self.publish(throttle, brake, steer)
-			else: self.reset()
+			else: 
+				self.reset()
+
 			rate.sleep()
-			
 
 	def publish(self, throttle, brake, steer):
 		scmd = SteeringCmd()
